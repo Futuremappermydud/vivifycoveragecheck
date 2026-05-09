@@ -13,6 +13,11 @@ const string BeatSaverUrlTemplate = "https://beatsaver.com/maps/{0}";
 const string StateFileName = "checked-maps.json";
 const string HasBundleReportFileName = "maps-with-bundleAndroid2021-vivify.txt";
 const string MissingBundleReportFileName = "maps-without-bundleAndroid2021-vivify.txt";
+const string PlaylistFileName = "vivify-bundleAndroid2021.playlist.json";
+const string PlaylistTitle = "Vivify Android 2021 Bundle";
+const string PlaylistAuthor = "vivifycoveragecheck";
+const string PlaylistDescription = "BeatSaver maps requiring Vivify that include bundleAndroid2021.vivify.";
+const string PlaylistImage = "";
 
 try
 {
@@ -76,6 +81,10 @@ try
     await File.WriteAllLinesAsync(missingBundleReportPath, missingBundleLines);
     await SaveCheckedMapsAsync(stateFilePath, checkedMaps);
 
+    var playlistPath = Path.Combine(baseDirectory, PlaylistFileName);
+    var playlist = BuildPlaylist(vivifyMaps, checkedMaps);
+    await SavePlaylistAsync(playlistPath, playlist);
+
     var (withBundle, totalChecked, unknownBundle) = GetCoverageStats(checkedMaps);
     if (totalChecked > 0)
     {
@@ -96,6 +105,7 @@ try
     Console.WriteLine($"Wrote: {hasBundleReportPath}");
     Console.WriteLine($"Wrote: {missingBundleReportPath}");
     Console.WriteLine($"Wrote: {stateFilePath}");
+    Console.WriteLine($"Wrote: {playlistPath}");
 }
 catch (Exception ex)
 {
@@ -514,6 +524,44 @@ static async Task SaveCheckedMapsAsync(string stateFilePath, Dictionary<string, 
     await JsonSerializer.SerializeAsync(stream, checkedMaps, options);
 }
 
+static async Task SavePlaylistAsync(string playlistFilePath, BeatSaverPlaylist playlist)
+{
+    await using var stream = File.Create(playlistFilePath);
+    var options = new JsonSerializerOptions
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+    await JsonSerializer.SerializeAsync(stream, playlist, options);
+}
+
+static BeatSaverPlaylist BuildPlaylist(Dictionary<string, BeatSaverMap> vivifyMaps, Dictionary<string, MapCheckState> checkedMaps)
+{
+    var songs = vivifyMaps.Values
+        .OrderBy(map => map.Name, StringComparer.OrdinalIgnoreCase)
+        .Where(map =>
+            checkedMaps.TryGetValue(map.Id, out var state) &&
+            state.HasBundle is true &&
+            string.Equals(state.Hash, map.Hash, StringComparison.OrdinalIgnoreCase))
+        .Select(map => new BeatSaverPlaylistSong(map.Id, map.Hash, map.Name))
+        .ToList();
+
+    var customData = new Dictionary<string, object?>
+    {
+        ["bundleFile"] = BundleFileName,
+        ["generatedAt"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+    };
+
+    return new BeatSaverPlaylist(
+        PlaylistTitle,
+        PlaylistAuthor,
+        PlaylistDescription,
+        PlaylistImage,
+        customData,
+        songs);
+}
+
 static string? GetString(JsonElement element, string propertyName)
 {
     if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind != JsonValueKind.String)
@@ -602,3 +650,16 @@ internal sealed record BeatSaverMap(
     string? DownloadUrl);
 
 internal sealed record MapCheckState(string Hash, bool? HasBundle);
+
+internal sealed record BeatSaverPlaylist(
+    string PlaylistTitle,
+    string PlaylistAuthor,
+    string PlaylistDescription,
+    string Image,
+    Dictionary<string, object?> CustomData,
+    List<BeatSaverPlaylistSong> Songs);
+
+internal sealed record BeatSaverPlaylistSong(
+    string Key,
+    string Hash,
+    string SongName);
