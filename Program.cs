@@ -539,11 +539,11 @@ static async Task SavePlaylistAsync(string playlistFilePath, BeatSaverPlaylist p
 static BeatSaverPlaylist BuildPlaylist(Dictionary<string, BeatSaverMap> vivifyMaps, Dictionary<string, MapCheckState> checkedMaps)
 {
     var songs = vivifyMaps.Values
-        .OrderBy(map => map.Name, StringComparer.OrdinalIgnoreCase)
         .Where(map =>
             checkedMaps.TryGetValue(map.Id, out var state) &&
             state.HasBundle is true &&
             string.Equals(state.Hash, map.Hash, StringComparison.OrdinalIgnoreCase))
+        .OrderBy(map => map.Name, StringComparer.OrdinalIgnoreCase)
         .Select(map => new BeatSaverPlaylistSong(map.Id, map.Hash, map.Name))
         .ToList();
 
