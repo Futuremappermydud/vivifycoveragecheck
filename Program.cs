@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 const string SearchEndpointTemplate = "https://api.beatsaver.com/search/text/{0}?sortOrder=Latest&vivify=true&q=";
 const int MaxSearchPages = 5;
@@ -16,7 +17,7 @@ try
     var hasBundleReportPath = Path.Combine(baseDirectory, HasBundleReportFileName);
     var missingBundleReportPath = Path.Combine(baseDirectory, MissingBundleReportFileName);
 
-    var checkedHashes = await LoadCheckedHashesAsync(stateFilePath);
+    var checkedMaps = await LoadCheckedMapsAsync(stateFilePath);
     var hasBundleLines = new List<string>();
     var missingBundleLines = new List<string>();
 
@@ -30,7 +31,9 @@ try
 
     foreach (var map in vivifyMaps.Values)
     {
-        if (checkedHashes.TryGetValue(map.Id, out var previousHash) && string.Equals(previousHash, map.Hash, StringComparison.OrdinalIgnoreCase))
+        if (checkedMaps.TryGetValue(map.Id, out var previousState) &&
+            string.Equals(previousState.Hash, map.Hash, StringComparison.OrdinalIgnoreCase) &&
+            previousState.HasBundle.HasValue)
         {
             continue;
         }
@@ -50,12 +53,28 @@ try
             missingBundleLines.Add(line);
         }
 
-        checkedHashes[map.Id] = map.Hash;
+        checkedMaps[map.Id] = new MapCheckState(map.Hash, hasBundleFile);
     }
 
     await File.WriteAllLinesAsync(hasBundleReportPath, hasBundleLines);
     await File.WriteAllLinesAsync(missingBundleReportPath, missingBundleLines);
-    await SaveCheckedHashesAsync(stateFilePath, checkedHashes);
+    await SaveCheckedMapsAsync(stateFilePath, checkedMaps);
+
+    var (withBundle, totalChecked, unknownBundle) = GetCoverageStats(checkedMaps);
+    if (totalChecked > 0)
+    {
+        var coveragePercent = (double)withBundle / totalChecked * 100;
+        Console.WriteLine($"Coverage: {withBundle}/{totalChecked} ({coveragePercent:0.00}%) checked maps include bundleAndroid2021.vivify.");
+    }
+    else
+    {
+        Console.WriteLine("Coverage: no checked maps yet.");
+    }
+
+    if (unknownBundle > 0)
+    {
+        Console.WriteLine($"Coverage excludes {unknownBundle} maps without stored bundle results.");
+    }
 
     Console.WriteLine($"Checked {mapsCheckedThisRun} new/updated maps.");
     Console.WriteLine($"Wrote: {hasBundleReportPath}");
@@ -274,24 +293,64 @@ static async Task<bool> MapContainsBundleFileAsync(HttpClient httpClient, string
         string.Equals(Path.GetFileName(entry.FullName), "bundleAndroid2021.vivify", StringComparison.OrdinalIgnoreCase));
 }
 
-static async Task<Dictionary<string, string>> LoadCheckedHashesAsync(string stateFilePath)
+static async Task<Dictionary<string, MapCheckState>> LoadCheckedMapsAsync(string stateFilePath)
 {
     if (!File.Exists(stateFilePath))
     {
-        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        return new Dictionary<string, MapCheckState>(StringComparer.OrdinalIgnoreCase);
     }
 
     await using var stream = File.OpenRead(stateFilePath);
-    var data = await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(stream);
-    return data is null
-        ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        : new Dictionary<string, string>(data, StringComparer.OrdinalIgnoreCase);
+    using var document = await JsonDocument.ParseAsync(stream);
+
+    if (document.RootElement.ValueKind != JsonValueKind.Object)
+    {
+        return new Dictionary<string, MapCheckState>(StringComparer.OrdinalIgnoreCase);
+    }
+
+    var data = new Dictionary<string, MapCheckState>(StringComparer.OrdinalIgnoreCase);
+
+    foreach (var property in document.RootElement.EnumerateObject())
+    {
+        if (property.Value.ValueKind == JsonValueKind.String)
+        {
+            var hash = property.Value.GetString();
+            if (!string.IsNullOrWhiteSpace(hash))
+            {
+                data[property.Name] = new MapCheckState(hash, null);
+            }
+
+            continue;
+        }
+
+        if (property.Value.ValueKind != JsonValueKind.Object)
+        {
+            continue;
+        }
+
+        var hashValue = GetStringFromAny(property.Value, "hash", "Hash");
+        if (string.IsNullOrWhiteSpace(hashValue))
+        {
+            continue;
+        }
+
+        var hasBundle = GetBooleanFromAny(property.Value, "hasBundle", "HasBundle");
+        data[property.Name] = new MapCheckState(hashValue, hasBundle);
+    }
+
+    return data;
 }
 
-static async Task SaveCheckedHashesAsync(string stateFilePath, Dictionary<string, string> checkedHashes)
+static async Task SaveCheckedMapsAsync(string stateFilePath, Dictionary<string, MapCheckState> checkedMaps)
 {
     await using var stream = File.Create(stateFilePath);
-    await JsonSerializer.SerializeAsync(stream, checkedHashes, new JsonSerializerOptions { WriteIndented = true });
+    var options = new JsonSerializerOptions
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+    await JsonSerializer.SerializeAsync(stream, checkedMaps, options);
 }
 
 static string? GetString(JsonElement element, string propertyName)
@@ -304,6 +363,51 @@ static string? GetString(JsonElement element, string propertyName)
     return property.GetString();
 }
 
+static string? GetStringFromAny(JsonElement element, string propertyName, string alternatePropertyName)
+{
+    return GetString(element, propertyName) ?? GetString(element, alternatePropertyName);
+}
+
+static bool? GetBooleanFromAny(JsonElement element, string propertyName, string alternatePropertyName)
+{
+    if (element.TryGetProperty(propertyName, out var property) || element.TryGetProperty(alternatePropertyName, out property))
+    {
+        if (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
+        {
+            return property.GetBoolean();
+        }
+    }
+
+    return null;
+}
+
+static (int WithBundle, int Total, int Unknown) GetCoverageStats(Dictionary<string, MapCheckState> checkedMaps)
+{
+    var withBundle = 0;
+    var withoutBundle = 0;
+    var unknown = 0;
+
+    foreach (var state in checkedMaps.Values)
+    {
+        if (state.HasBundle is null)
+        {
+            unknown++;
+            continue;
+        }
+
+        if (state.HasBundle.Value)
+        {
+            withBundle++;
+        }
+        else
+        {
+            withoutBundle++;
+        }
+    }
+
+    return (withBundle, withBundle + withoutBundle, unknown);
+}
+
 internal sealed record BeatSaverMap(
     string Id,
     string Name,
@@ -311,3 +415,5 @@ internal sealed record BeatSaverMap(
     string Authors,
     string Hash,
     string DownloadUrl);
+
+internal sealed record MapCheckState(string Hash, bool? HasBundle);
