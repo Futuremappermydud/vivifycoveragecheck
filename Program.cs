@@ -1,9 +1,12 @@
 using System.Globalization;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-const string MapsEndpointTemplate = "https://repo.totalbs.dev/api/v1/maps?page={0}";
-const int MaxSearchPages = 50;
+const string BeatSaverSearchEndpointTemplate = "https://api.beatsaver.com/search/text/{0}?sortOrder=Latest&vivify=true&q=";
+const int MaxBeatSaverPages = 5;
+const string LunarRepoMapsEndpointTemplate = "https://repo.totalbs.dev/api/v1/maps?page={0}";
+const int MaxLunarRepoPages = 50;
 const string BundleKey = "android2021";
 const string BundleFileName = "bundleAndroid2021.vivify";
 const string BeatSaverUrlTemplate = "https://beatsaver.com/maps/{0}";
@@ -25,17 +28,21 @@ try
     using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
     httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("vivifycoveragecheck/1.0");
 
-    var vivifyMaps = await FetchTotalBsMapsAsync(httpClient);
-    Console.WriteLine($"Found {vivifyMaps.Count} maps in the TotalBS API.");
+    var lunarRepoBundleHashes = await FetchLunarRepoBundleHashesAsync(httpClient);
+    Console.WriteLine($"Found {lunarRepoBundleHashes.Count} maps with LunarRepo bundle data.");
+
+    var vivifyMaps = await FetchBeatSaverVivifyMapsAsync(httpClient);
+    Console.WriteLine($"Found {vivifyMaps.Count} BeatSaver maps with the Vivify requirement.");
 
     var mapsCheckedThisRun = 0;
 
     foreach (var map in vivifyMaps.Values)
     {
+        var hasLunarRepoBundle = HasLunarRepoBundle(lunarRepoBundleHashes, map.Id, map.Hash);
         if (checkedMaps.TryGetValue(map.Id, out var previousState) &&
             string.Equals(previousState.Hash, map.Hash, StringComparison.OrdinalIgnoreCase) &&
             previousState.HasBundle.HasValue &&
-            previousState.HasBundle.Value == map.HasAndroid2021Bundle)
+            (previousState.HasBundle.Value || !hasLunarRepoBundle))
         {
             continue;
         }
@@ -43,7 +50,11 @@ try
         mapsCheckedThisRun++;
         Console.WriteLine($"Checking {map.Id} ({map.Name})...");
 
-        var hasBundleFile = map.HasAndroid2021Bundle;
+        var hasBundleFile = hasLunarRepoBundle;
+        if (!hasBundleFile && !string.IsNullOrWhiteSpace(map.DownloadUrl))
+        {
+            hasBundleFile = await MapContainsBundleFileAsync(httpClient, map.DownloadUrl);
+        }
         var line = $"{map.BeatSaverUrl} | {map.Name} | {map.Authors}";
 
         if (hasBundleFile)
@@ -66,7 +77,7 @@ try
     if (totalChecked > 0)
     {
         var coveragePercent = (double)withBundle / totalChecked * 100;
-    Console.WriteLine($"Coverage: {withBundle}/{totalChecked} ({coveragePercent:0.00}%) checked maps include {BundleFileName}.");
+        Console.WriteLine($"Coverage: {withBundle}/{totalChecked} ({coveragePercent:0.00}%) checked maps include {BundleFileName}.");
     }
     else
     {
@@ -89,20 +100,20 @@ catch (Exception ex)
     Environment.ExitCode = 1;
 }
 
-static async Task<Dictionary<string, TotalBsMap>> FetchTotalBsMapsAsync(HttpClient httpClient)
+static async Task<Dictionary<string, BeatSaverMap>> FetchBeatSaverVivifyMapsAsync(HttpClient httpClient)
 {
-    var mapsById = new Dictionary<string, TotalBsMap>(StringComparer.OrdinalIgnoreCase);
+    var mapsById = new Dictionary<string, BeatSaverMap>(StringComparer.OrdinalIgnoreCase);
 
-    for (var page = 0; page < MaxSearchPages; page++)
+    for (var page = 0; page < MaxBeatSaverPages; page++)
     {
-        using var response = await httpClient.GetAsync(string.Format(CultureInfo.InvariantCulture, MapsEndpointTemplate, page));
+        using var response = await httpClient.GetAsync(string.Format(CultureInfo.InvariantCulture, BeatSaverSearchEndpointTemplate, page));
         response.EnsureSuccessStatusCode();
 
         await using var stream = await response.Content.ReadAsStreamAsync();
         using var document = await JsonDocument.ParseAsync(stream);
         var root = document.RootElement;
 
-        var docs = GetMaps(root).ToList();
+        var docs = GetBeatSaverDocs(root).ToList();
         if (docs.Count == 0)
         {
             break;
@@ -110,7 +121,7 @@ static async Task<Dictionary<string, TotalBsMap>> FetchTotalBsMapsAsync(HttpClie
 
         foreach (var doc in docs)
         {
-            if (!TryParseMap(doc, out var map) || map is null)
+            if (!TryParseBeatSaverMap(doc, out var map) || map is null)
             {
                 continue;
             }
@@ -121,7 +132,7 @@ static async Task<Dictionary<string, TotalBsMap>> FetchTotalBsMapsAsync(HttpClie
             }
         }
 
-        if (IsLastPage(root, page, docs.Count))
+        if (IsBeatSaverLastPage(root, page))
         {
             break;
         }
@@ -130,7 +141,230 @@ static async Task<Dictionary<string, TotalBsMap>> FetchTotalBsMapsAsync(HttpClie
     return mapsById;
 }
 
-static IEnumerable<JsonElement> GetMaps(JsonElement root)
+static IEnumerable<JsonElement> GetBeatSaverDocs(JsonElement root)
+{
+    if (root.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var item in root.EnumerateArray())
+        {
+            yield return item;
+        }
+
+        yield break;
+    }
+
+    if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("docs", out var docs) && docs.ValueKind == JsonValueKind.Array)
+    {
+        foreach (var item in docs.EnumerateArray())
+        {
+            yield return item;
+        }
+    }
+}
+
+static bool IsBeatSaverLastPage(JsonElement root, int page)
+{
+    if (root.ValueKind != JsonValueKind.Object)
+    {
+        return false;
+    }
+
+    if (root.TryGetProperty("lastPage", out var lastPage))
+    {
+        return lastPage.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.Number => lastPage.TryGetInt32(out var lastPageNumber) && page >= lastPageNumber,
+            _ => false,
+        };
+    }
+
+    if (root.TryGetProperty("info", out var info) && info.ValueKind == JsonValueKind.Object && info.TryGetProperty("pages", out var pagesElement) && pagesElement.TryGetInt32(out var pages))
+    {
+        return page >= pages - 1;
+    }
+
+    return false;
+}
+
+static bool TryParseBeatSaverMap(JsonElement doc, out BeatSaverMap? map)
+{
+    map = null;
+
+    if (doc.ValueKind != JsonValueKind.Object)
+    {
+        return false;
+    }
+
+    var id = GetString(doc, "id");
+    if (string.IsNullOrWhiteSpace(id))
+    {
+        return false;
+    }
+
+    var name = GetString(doc, "name") ?? id;
+
+    var levelAuthorName = string.Empty;
+    if (doc.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object)
+    {
+        levelAuthorName = GetString(metadata, "levelAuthorName") ?? string.Empty;
+    }
+
+    var uploaderName = string.Empty;
+    if (doc.TryGetProperty("uploader", out var uploader) && uploader.ValueKind == JsonValueKind.Object)
+    {
+        uploaderName = GetString(uploader, "name") ?? GetString(uploader, "username") ?? string.Empty;
+    }
+
+    var authors = BuildAuthors(levelAuthorName, uploaderName);
+    var beatSaverUrl = GetString(doc, "url") ?? string.Format(CultureInfo.InvariantCulture, BeatSaverUrlTemplate, id);
+
+    if (!TryGetLatestBeatSaverVersion(doc, out var hash, out var downloadUrl) ||
+        string.IsNullOrWhiteSpace(hash) ||
+        string.IsNullOrWhiteSpace(downloadUrl))
+    {
+        return false;
+    }
+
+    map = new BeatSaverMap(id, name, beatSaverUrl, authors, hash, downloadUrl);
+    return true;
+}
+
+static string BuildAuthors(string levelAuthorName, string uploaderName)
+{
+    if (string.IsNullOrWhiteSpace(levelAuthorName) && string.IsNullOrWhiteSpace(uploaderName))
+    {
+        return "Unknown";
+    }
+
+    if (string.IsNullOrWhiteSpace(levelAuthorName))
+    {
+        return uploaderName;
+    }
+
+    if (string.IsNullOrWhiteSpace(uploaderName) || string.Equals(levelAuthorName, uploaderName, StringComparison.OrdinalIgnoreCase))
+    {
+        return levelAuthorName;
+    }
+
+    return $"{levelAuthorName} (uploader: {uploaderName})";
+}
+
+static bool TryGetLatestBeatSaverVersion(JsonElement doc, out string? hash, out string? downloadUrl)
+{
+    hash = null;
+    downloadUrl = null;
+
+    if (!doc.TryGetProperty("versions", out var versions) || versions.ValueKind != JsonValueKind.Array)
+    {
+        return false;
+    }
+
+    JsonElement? selectedVersion = null;
+    DateTimeOffset? selectedCreatedAt = null;
+
+    foreach (var version in versions.EnumerateArray())
+    {
+        if (version.ValueKind != JsonValueKind.Object)
+        {
+            continue;
+        }
+
+        var createdAtString = GetString(version, "createdAt");
+        if (DateTimeOffset.TryParse(createdAtString, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var createdAt))
+        {
+            if (selectedCreatedAt is null || createdAt > selectedCreatedAt.Value)
+            {
+                selectedCreatedAt = createdAt;
+                selectedVersion = version;
+            }
+        }
+        else if (selectedVersion is null)
+        {
+            selectedVersion = version;
+        }
+    }
+
+    if (selectedVersion is null)
+    {
+        return false;
+    }
+
+    hash = GetString(selectedVersion.Value, "hash");
+    downloadUrl = GetStringFromAny(selectedVersion.Value, "downloadURL", "downloadUrl");
+    return true;
+}
+
+static async Task<Dictionary<string, HashSet<string>>> FetchLunarRepoBundleHashesAsync(HttpClient httpClient)
+{
+    var bundleHashesByMapId = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+    for (var page = 0; page < MaxLunarRepoPages; page++)
+    {
+        using var response = await httpClient.GetAsync(string.Format(CultureInfo.InvariantCulture, LunarRepoMapsEndpointTemplate, page));
+        response.EnsureSuccessStatusCode();
+
+        await using var stream = await response.Content.ReadAsStreamAsync();
+        using var document = await JsonDocument.ParseAsync(stream);
+        var root = document.RootElement;
+
+        var docs = GetLunarRepoMaps(root).ToList();
+        if (docs.Count == 0)
+        {
+            break;
+        }
+
+        foreach (var doc in docs)
+        {
+            if (doc.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var id = GetString(doc, "id");
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                continue;
+            }
+
+            if (!doc.TryGetProperty("versions", out var versions) || versions.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var version in versions.EnumerateArray())
+            {
+                if (version.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var hash = GetString(version, "hash");
+                if (string.IsNullOrWhiteSpace(hash) || !HasAndroid2021Bundle(version))
+                {
+                    continue;
+                }
+
+                if (!bundleHashesByMapId.TryGetValue(id, out var hashSet))
+                {
+                    hashSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    bundleHashesByMapId[id] = hashSet;
+                }
+
+                hashSet.Add(hash);
+            }
+        }
+
+        if (IsLunarRepoLastPage(root, page, docs.Count))
+        {
+            break;
+        }
+    }
+
+    return bundleHashesByMapId;
+}
+
+static IEnumerable<JsonElement> GetLunarRepoMaps(JsonElement root)
 {
     if (root.ValueKind == JsonValueKind.Array)
     {
@@ -151,7 +385,7 @@ static IEnumerable<JsonElement> GetMaps(JsonElement root)
     }
 }
 
-static bool IsLastPage(JsonElement root, int page, int pageItemCount)
+static bool IsLunarRepoLastPage(JsonElement root, int page, int pageItemCount)
 {
     if (root.ValueKind != JsonValueKind.Object)
     {
@@ -178,84 +412,9 @@ static bool IsLastPage(JsonElement root, int page, int pageItemCount)
     return false;
 }
 
-static bool TryParseMap(JsonElement doc, out TotalBsMap? map)
+static bool HasLunarRepoBundle(Dictionary<string, HashSet<string>> bundleHashesByMapId, string mapId, string hash)
 {
-    map = null;
-
-    if (doc.ValueKind != JsonValueKind.Object)
-    {
-        return false;
-    }
-
-    var id = GetString(doc, "id");
-    if (string.IsNullOrWhiteSpace(id))
-    {
-        return false;
-    }
-
-    var name = GetString(doc, "name") ?? id;
-
-    var uploaderName = string.Empty;
-    if (doc.TryGetProperty("author", out var uploader) && uploader.ValueKind == JsonValueKind.Object)
-    {
-        uploaderName = GetString(uploader, "displayName") ?? GetString(uploader, "username") ?? string.Empty;
-    }
-
-    var authors = string.IsNullOrWhiteSpace(uploaderName) ? "Unknown" : uploaderName;
-    var beatSaverUrl = string.Format(CultureInfo.InvariantCulture, BeatSaverUrlTemplate, id);
-
-    if (!TryGetLatestVersion(doc, out var hash, out var hasBundle) || string.IsNullOrWhiteSpace(hash))
-    {
-        return false;
-    }
-
-    map = new TotalBsMap(id, name, beatSaverUrl, authors, hash, hasBundle);
-    return true;
-}
-
-static bool TryGetLatestVersion(JsonElement doc, out string? hash, out bool hasBundle)
-{
-    hash = null;
-    hasBundle = false;
-
-    if (!doc.TryGetProperty("versions", out var versions) || versions.ValueKind != JsonValueKind.Array)
-    {
-        return false;
-    }
-
-    JsonElement? selectedVersion = null;
-    DateTimeOffset? selectedCreatedAt = null;
-
-    foreach (var version in versions.EnumerateArray())
-    {
-        if (version.ValueKind != JsonValueKind.Object)
-        {
-            continue;
-        }
-
-        var createdAtString = GetStringFromAny(version, "modifiedDate", "createdDate", "createdAt");
-        if (DateTimeOffset.TryParse(createdAtString, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var createdAt))
-        {
-            if (selectedCreatedAt is null || createdAt > selectedCreatedAt.Value)
-            {
-                selectedCreatedAt = createdAt;
-                selectedVersion = version;
-            }
-        }
-        else if (selectedVersion is null)
-        {
-            selectedVersion = version;
-        }
-    }
-
-    if (selectedVersion is null)
-    {
-        return false;
-    }
-
-    hash = GetString(selectedVersion.Value, "hash");
-    hasBundle = HasAndroid2021Bundle(selectedVersion.Value);
-    return true;
+    return bundleHashesByMapId.TryGetValue(mapId, out var hashes) && hashes.Contains(hash);
 }
 
 static bool HasAndroid2021Bundle(JsonElement version)
@@ -277,6 +436,19 @@ static bool HasAndroid2021Bundle(JsonElement version)
     }
 
     return false;
+}
+
+static async Task<bool> MapContainsBundleFileAsync(HttpClient httpClient, string downloadUrl)
+{
+    using var response = await httpClient.GetAsync(downloadUrl);
+    response.EnsureSuccessStatusCode();
+
+    await using var zipStream = await response.Content.ReadAsStreamAsync();
+    using var zipArchive = new ZipArchive(zipStream, ZipArchiveMode.Read, leaveOpen: false);
+
+    return zipArchive.Entries.Any(entry =>
+        !string.IsNullOrWhiteSpace(entry.FullName) &&
+        string.Equals(Path.GetFileName(entry.FullName), BundleFileName, StringComparison.OrdinalIgnoreCase));
 }
 
 static async Task<Dictionary<string, MapCheckState>> LoadCheckedMapsAsync(string stateFilePath)
@@ -413,12 +585,12 @@ static (int WithBundle, int Total, int Unknown) GetCoverageStats(Dictionary<stri
     return (withBundle, withBundle + withoutBundle, unknown);
 }
 
-internal sealed record TotalBsMap(
+internal sealed record BeatSaverMap(
     string Id,
     string Name,
     string BeatSaverUrl,
     string Authors,
     string Hash,
-    bool HasAndroid2021Bundle);
+    string DownloadUrl);
 
 internal sealed record MapCheckState(string Hash, bool? HasBundle);
