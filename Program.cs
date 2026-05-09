@@ -43,12 +43,8 @@ try
             string.Equals(previousState.Hash, map.Hash, StringComparison.OrdinalIgnoreCase) &&
             previousState.HasBundle.HasValue)
         {
-            if (previousState.HasBundle.Value)
-            {
-                continue;
-            }
-
-            if (!hasLunarRepoBundle)
+            var shouldSkip = previousState.HasBundle.Value || !hasLunarRepoBundle;
+            if (shouldSkip)
             {
                 continue;
             }
@@ -408,7 +404,8 @@ static bool IsLunarRepoLastPage(JsonElement root, int page, int pageItemCount)
 
         if (pageSize is > 0 && totalCount is >= 0)
         {
-            return (long)(currentPage + 1) * pageSize.Value >= totalCount.Value;
+            var nextPageStart = (long)(currentPage + 1) * pageSize.Value;
+            return nextPageStart >= totalCount.Value;
         }
 
         if (pageSize is > 0)
