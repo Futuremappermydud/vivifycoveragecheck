@@ -1,6 +1,6 @@
 # vivifycoveragecheck
 
-Console app that scans BeatSaver maps for the `Vivify` requirement, only checks new/updated map hashes across runs, reports whether each new/updated map archive contains `bundleAndroid2021.vivify`, and prints the overall bundle coverage percentage across all checked maps.
+Console app that scans BeatSaver for maps requiring `Vivify`, tracks the latest version hash for each map across runs, uses LunarRepo (TotalBS) bundle metadata when available, falls back to checking BeatSaver downloads for `bundleAndroid2021.vivify`, and prints the overall bundle coverage percentage across all checked maps.
 
 ## Run
 
