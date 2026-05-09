@@ -43,8 +43,12 @@ try
             string.Equals(previousState.Hash, map.Hash, StringComparison.OrdinalIgnoreCase) &&
             previousState.HasBundle.HasValue)
         {
-            var previouslyHadBundle = previousState.HasBundle.Value;
-            if (previouslyHadBundle || !hasLunarRepoBundle)
+            if (previousState.HasBundle.Value)
+            {
+                continue;
+            }
+
+            if (!hasLunarRepoBundle)
             {
                 continue;
             }
@@ -228,10 +232,7 @@ static bool TryParseBeatSaverMap(JsonElement doc, out BeatSaverMap? map)
         return false;
     }
 
-    if (string.IsNullOrWhiteSpace(downloadUrl))
-    {
-        downloadUrl = string.Empty;
-    }
+    downloadUrl ??= string.Empty;
 
     map = new BeatSaverMap(id, name, beatSaverUrl, authors, hash, downloadUrl);
     return true;
@@ -407,7 +408,7 @@ static bool IsLunarRepoLastPage(JsonElement root, int page, int pageItemCount)
 
         if (pageSize is > 0 && totalCount is >= 0)
         {
-            return (currentPage + 1) * pageSize.Value >= totalCount.Value;
+            return (long)(currentPage + 1) * pageSize.Value >= totalCount.Value;
         }
 
         if (pageSize is > 0)
