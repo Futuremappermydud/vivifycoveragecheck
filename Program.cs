@@ -32,11 +32,10 @@ try
 
     foreach (var map in vivifyMaps.Values)
     {
-        var hasBundleFile = map.HasAndroid2021Bundle;
         if (checkedMaps.TryGetValue(map.Id, out var previousState) &&
             string.Equals(previousState.Hash, map.Hash, StringComparison.OrdinalIgnoreCase) &&
             previousState.HasBundle.HasValue &&
-            previousState.HasBundle.Value == hasBundleFile)
+            previousState.HasBundle.Value == map.HasAndroid2021Bundle)
         {
             continue;
         }
@@ -44,6 +43,7 @@ try
         mapsCheckedThisRun++;
         Console.WriteLine($"Checking {map.Id} ({map.Name})...");
 
+        var hasBundleFile = map.HasAndroid2021Bundle;
         var line = $"{map.BeatSaverUrl} | {map.Name} | {map.Authors}";
 
         if (hasBundleFile)
