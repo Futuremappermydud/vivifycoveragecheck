@@ -41,10 +41,13 @@ try
         var hasLunarRepoBundle = HasLunarRepoBundle(lunarRepoBundleHashes, map.Id, map.Hash);
         if (checkedMaps.TryGetValue(map.Id, out var previousState) &&
             string.Equals(previousState.Hash, map.Hash, StringComparison.OrdinalIgnoreCase) &&
-            previousState.HasBundle.HasValue &&
-            (previousState.HasBundle.Value || !hasLunarRepoBundle))
+            previousState.HasBundle.HasValue)
         {
-            continue;
+            var previouslyHadBundle = previousState.HasBundle.Value;
+            if (previouslyHadBundle || !hasLunarRepoBundle)
+            {
+                continue;
+            }
         }
 
         mapsCheckedThisRun++;
@@ -220,10 +223,14 @@ static bool TryParseBeatSaverMap(JsonElement doc, out BeatSaverMap? map)
     var beatSaverUrl = GetString(doc, "url") ?? string.Format(CultureInfo.InvariantCulture, BeatSaverUrlTemplate, id);
 
     if (!TryGetLatestBeatSaverVersion(doc, out var hash, out var downloadUrl) ||
-        string.IsNullOrWhiteSpace(hash) ||
-        string.IsNullOrWhiteSpace(downloadUrl))
+        string.IsNullOrWhiteSpace(hash))
     {
         return false;
+    }
+
+    if (string.IsNullOrWhiteSpace(downloadUrl))
+    {
+        downloadUrl = string.Empty;
     }
 
     map = new BeatSaverMap(id, name, beatSaverUrl, authors, hash, downloadUrl);
@@ -535,10 +542,15 @@ static string? GetStringFromAny(JsonElement element, params string[] propertyNam
     return null;
 }
 
-static bool? GetBooleanFromAny(JsonElement element, string propertyName, string alternatePropertyName)
+static bool? GetBooleanFromAny(JsonElement element, params string[] propertyNames)
 {
-    if (element.TryGetProperty(propertyName, out var property) || element.TryGetProperty(alternatePropertyName, out property))
+    foreach (var propertyName in propertyNames)
     {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            continue;
+        }
+
         if (property.ValueKind == JsonValueKind.True || property.ValueKind == JsonValueKind.False)
         {
             return property.GetBoolean();
