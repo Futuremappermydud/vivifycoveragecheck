@@ -2,8 +2,8 @@ using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
 
-const string SearchEndpointTemplate = "https://api.beatsaver.com/search/text/{0}?sortOrder=Latest&q=";
-const int MaxSearchPages = 5000;
+const string SearchEndpointTemplate = "https://api.beatsaver.com/search/text/{0}?sortOrder=Latest&vivify=true&q=";
+const int MaxSearchPages = 5;
 const string VivifyRequirement = "Vivify";
 const string StateFileName = "checked-maps.json";
 const string HasBundleReportFileName = "maps-with-bundleAndroid2021-vivify.txt";
@@ -90,11 +90,6 @@ static async Task<Dictionary<string, BeatSaverMap>> FetchVivifyMapsAsync(HttpCli
         foreach (var doc in docs)
         {
             if (!TryParseMap(doc, out var map) || map is null)
-            {
-                continue;
-            }
-
-            if (!MapHasVivifyRequirement(doc))
             {
                 continue;
             }
@@ -264,41 +259,6 @@ static bool TryGetLatestVersion(JsonElement doc, out string? hash, out string? d
     hash = GetString(selectedVersion.Value, "hash");
     downloadUrl = GetString(selectedVersion.Value, "downloadURL") ?? GetString(selectedVersion.Value, "downloadUrl");
     return true;
-}
-
-static bool MapHasVivifyRequirement(JsonElement doc)
-{
-    if (!doc.TryGetProperty("versions", out var versions) || versions.ValueKind != JsonValueKind.Array)
-    {
-        return false;
-    }
-
-    foreach (var version in versions.EnumerateArray())
-    {
-        if (!version.TryGetProperty("diffs", out var diffs) || diffs.ValueKind != JsonValueKind.Array)
-        {
-            continue;
-        }
-
-        foreach (var diff in diffs.EnumerateArray())
-        {
-            if (!diff.TryGetProperty("requirements", out var requirements) || requirements.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
-
-            foreach (var requirement in requirements.EnumerateArray())
-            {
-                if (requirement.ValueKind == JsonValueKind.String &&
-                    string.Equals(requirement.GetString(), VivifyRequirement, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-
-    return false;
 }
 
 static async Task<bool> MapContainsBundleFileAsync(HttpClient httpClient, string downloadUrl)
