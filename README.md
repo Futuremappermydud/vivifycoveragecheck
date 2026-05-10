@@ -13,3 +13,4 @@ On each run, the app writes files next to the built executable:
 - `checked-maps.json` (map id -> `{ hash, hasBundle }`)
 - `maps-with-bundleAndroid2021-vivify.txt`
 - `maps-without-bundleAndroid2021-vivify.txt`
+- `vivify-bundleAndroid2021.playlist.json` (BeatSaver playlist of maps that include `bundleAndroid2021.vivify`)
