@@ -27,8 +27,6 @@ try
     var missingBundleReportPath = Path.Combine(baseDirectory, MissingBundleReportFileName);
 
     var checkedMaps = await LoadCheckedMapsAsync(stateFilePath);
-    var hasBundleLines = new List<string>();
-    var missingBundleLines = new List<string>();
 
     using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
     httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("vivifycoveragecheck/1.0");
@@ -63,19 +61,11 @@ try
         {
             hasBundleFile = await MapContainsBundleFileAsync(httpClient, map.DownloadUrl);
         }
-        var line = $"{map.BeatSaverUrl} | {map.Name} | {map.Authors}";
-
-        if (hasBundleFile)
-        {
-            hasBundleLines.Add(line);
-        }
-        else
-        {
-            missingBundleLines.Add(line);
-        }
-
         checkedMaps[map.Id] = new MapCheckState(map.Hash, hasBundleFile);
     }
+
+    var hasBundleLines = BuildBundleReportLines(vivifyMaps, checkedMaps, hasBundle: true);
+    var missingBundleLines = BuildBundleReportLines(vivifyMaps, checkedMaps, hasBundle: false);
 
     await File.WriteAllLinesAsync(hasBundleReportPath, hasBundleLines);
     await File.WriteAllLinesAsync(missingBundleReportPath, missingBundleLines);
@@ -560,6 +550,29 @@ static BeatSaverPlaylist BuildPlaylist(Dictionary<string, BeatSaverMap> vivifyMa
         PlaylistImage,
         customData,
         songs);
+}
+
+static List<string> BuildBundleReportLines(
+    Dictionary<string, BeatSaverMap> vivifyMaps,
+    Dictionary<string, MapCheckState> checkedMaps,
+    bool hasBundle)
+{
+    return checkedMaps
+        .Where(kvp => kvp.Value.HasBundle == hasBundle)
+        .Select(kvp => FormatMapReportLine(kvp.Key, vivifyMaps))
+        .OrderBy(line => line, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
+
+static string FormatMapReportLine(string mapId, Dictionary<string, BeatSaverMap> vivifyMaps)
+{
+    if (vivifyMaps.TryGetValue(mapId, out var map))
+    {
+        return $"{map.BeatSaverUrl} | {map.Name} | {map.Authors}";
+    }
+
+    var fallbackUrl = string.Format(CultureInfo.InvariantCulture, BeatSaverUrlTemplate, mapId);
+    return $"{fallbackUrl} | {mapId} | Unknown";
 }
 
 static string? GetString(JsonElement element, string propertyName)
