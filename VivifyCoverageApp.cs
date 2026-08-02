@@ -6,7 +6,8 @@ internal static class VivifyCoverageApp
         var stateFilePath = Path.Combine(baseDirectory, AppConfig.StateFileName);
         var hasBundleReportPath = Path.Combine(baseDirectory, AppConfig.HasBundleReportFileName);
         var missingBundleReportPath = Path.Combine(baseDirectory, AppConfig.MissingBundleReportFileName);
-        var playlistPath = Path.Combine(baseDirectory, AppConfig.PlaylistFileName);
+        var withBundlePlaylistPath = Path.Combine(baseDirectory, AppConfig.WithBundlePlaylistFileName);
+        var missingBundlePlaylistPath = Path.Combine(baseDirectory, AppConfig.MissingBundlePlaylistFileName);
 
         var checkedMapsStore = new CheckedMapsStore();
         var playlistService = new PlaylistService();
@@ -69,10 +70,19 @@ internal static class VivifyCoverageApp
         await File.WriteAllLinesAsync(missingBundleReportPath, missingBundleLines);
         await checkedMapsStore.SaveAsync(stateFilePath, checkedMaps);
 
-        var playlist = playlistService.Build(vivifyMaps, checkedMaps);
-        await playlistService.SaveAsync(playlistPath, playlist);
+        var withBundlePlaylist = playlistService.BuildWithBundle(vivifyMaps, checkedMaps);
+        var missingBundlePlaylist = playlistService.BuildMissingBundle(vivifyMaps, checkedMaps);
+        await playlistService.SaveAsync(withBundlePlaylistPath, withBundlePlaylist);
+        await playlistService.SaveAsync(missingBundlePlaylistPath, missingBundlePlaylist);
 
-        WriteCoverageSummary(checkedMaps, mapsCheckedThisRun, hasBundleReportPath, missingBundleReportPath, stateFilePath, playlistPath);
+        WriteCoverageSummary(
+            checkedMaps,
+            mapsCheckedThisRun,
+            hasBundleReportPath,
+            missingBundleReportPath,
+            stateFilePath,
+            withBundlePlaylistPath,
+            missingBundlePlaylistPath);
     }
 
     private static void WriteCoverageSummary(
@@ -81,7 +91,8 @@ internal static class VivifyCoverageApp
         string hasBundleReportPath,
         string missingBundleReportPath,
         string stateFilePath,
-        string playlistPath)
+        string withBundlePlaylistPath,
+        string missingBundlePlaylistPath)
     {
         var (withBundle, totalChecked, unknownBundle) = CoverageStats.Calculate(checkedMaps);
         if (totalChecked > 0)
@@ -104,6 +115,7 @@ internal static class VivifyCoverageApp
         Console.WriteLine($"Wrote: {hasBundleReportPath}");
         Console.WriteLine($"Wrote: {missingBundleReportPath}");
         Console.WriteLine($"Wrote: {stateFilePath}");
-        Console.WriteLine($"Wrote: {playlistPath}");
+        Console.WriteLine($"Wrote: {withBundlePlaylistPath}");
+        Console.WriteLine($"Wrote: {missingBundlePlaylistPath}");
     }
 }
