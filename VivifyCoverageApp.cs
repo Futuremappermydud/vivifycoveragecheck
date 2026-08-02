@@ -11,9 +11,8 @@ internal static class VivifyCoverageApp
 
         var checkedMapsStore = new CheckedMapsStore();
         var playlistService = new PlaylistService();
+        var reportService = new ReportService();
         var checkedMaps = await checkedMapsStore.LoadAsync(stateFilePath);
-        var hasBundleLines = new List<string>();
-        var missingBundleLines = new List<string>();
 
         using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
         httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(AppConfig.UserAgent);
@@ -53,21 +52,12 @@ internal static class VivifyCoverageApp
                 hasBundleFile = await bundleChecker.MapContainsBundleFileAsync(map.DownloadUrl);
             }
 
-            var line = $"{map.BeatSaverUrl} | {map.Name} | {map.Authors}";
-            if (hasBundleFile)
-            {
-                hasBundleLines.Add(line);
-            }
-            else
-            {
-                missingBundleLines.Add(line);
-            }
-
             checkedMaps[map.Id] = new MapCheckState(map.Hash, hasBundleFile);
         }
 
-        await File.WriteAllLinesAsync(hasBundleReportPath, hasBundleLines);
-        await File.WriteAllLinesAsync(missingBundleReportPath, missingBundleLines);
+        var (hasBundleLines, missingBundleLines) = reportService.Build(vivifyMaps, checkedMaps);
+        await reportService.SaveAsync(hasBundleReportPath, hasBundleLines);
+        await reportService.SaveAsync(missingBundleReportPath, missingBundleLines);
         await checkedMapsStore.SaveAsync(stateFilePath, checkedMaps);
 
         var withBundlePlaylist = playlistService.BuildWithBundle(vivifyMaps, checkedMaps);

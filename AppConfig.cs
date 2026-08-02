@@ -18,12 +18,12 @@ internal static class AppConfig
     public const string PlaylistAuthor = "vivifycoveragecheck";
     public const string PlaylistImage = "";
 
-    public const string WithBundlePlaylistFileName = "vivify-bundleAndroid2021.playlist.json";
+    public const string WithBundlePlaylistFileName = "vivify-bundleAndroid2021.bplist";
     public const string WithBundlePlaylistTitle = "Vivify Android 2021 Bundle";
     public const string WithBundlePlaylistDescription =
         "BeatSaver maps requiring Vivify that include bundleAndroid2021.vivify.";
 
-    public const string MissingBundlePlaylistFileName = "vivify-missing-bundleAndroid2021.playlist.json";
+    public const string MissingBundlePlaylistFileName = "vivify-missing-bundleAndroid2021.bplist";
     public const string MissingBundlePlaylistTitle = "Vivify Missing Android 2021 Bundle";
     public const string MissingBundlePlaylistDescription =
         "BeatSaver maps requiring Vivify that are missing bundleAndroid2021.vivify.";
